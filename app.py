@@ -22,7 +22,6 @@ def identificar_modelo(texto):
     return "saco"
 
 def preencher_celula_mesclada(ws, texto_busca, valor):
-    """Preenche células ao lado de texto alvo mesmo se forem mescladas"""
     for row in ws.iter_rows():
         for cell in row:
             try:
@@ -55,9 +54,11 @@ def preencher_planilha_saco(ws, dados):
         preencher_celula_mesclada(ws, "2.8 ESPESSURA", dados.get("espessura", ""))
         preencher_celula_mesclada(ws, "QTDE DE SACOS POR AMARRAÇÃO", dados.get("qtd_sacos", ""))
         preencher_celula_mesclada(ws, "OBSERVAÇÕES", dados.get("observacoes", ""))
-        ws['J20'].value = "X"
-        ws['B38'].value = "X"
-        ws['G40'].value = "X"
+        if dados.get("fundo") == "SIM":
+            ws['J20'].value = "X"
+        if dados.get("sanfona") == "NÃO":
+            ws['B38'].value = "X"
+        ws['G40'].value = "X"  # QUADRADO (sempre marcado como exemplo)
         return True
     except Exception as e:
         st.error(f"Erro ao preencher planilha: {str(e)}")
@@ -68,15 +69,19 @@ def processar_pdf(texto):
     def extrair(padrao):
         match = re.search(padrao, texto, re.IGNORECASE)
         return match.group(1).strip() if match else ""
-    dados["cliente"] = extrair(r"NOME DO CLIENTE[:\s]*(.*)")
-    dados["produto"] = extrair(r"PRODUTO[:\s]*(.*)")
-    dados["codigo"] = extrair(r"PEDIDO N[º°:\s]*(.*)")
-    dados["largura"] = extrair(r"LARGURA\s*\(mm\)[:\s]*(\d+)")
-    dados["comprimento"] = extrair(r"COMPRIMENTO[:\s]*(\d+)")
-    espessura = extrair(r"ESPESSURA\s*\(p/ parede\)[:\s]*([\d,]+)")
-    dados["espessura"] = espessura.replace(",", ".") if espessura else ""
-    dados["qtd_sacos"] = extrair(r"OTDE DE SACOS P/ PACOTE[:\s]*(\d+)")
-    dados["observacoes"] = extrair(r"OBSERVAÇÕES[\s\n]*(.*?)(?=\n\s*\n|$)")
+
+    dados["cliente"] = extrair(r"CLIENTES:\s*\d+\s*-\s*(.*)")
+    dados["produto"] = extrair(r"PRODUTO:\s*(.*?)(?=QTDE|LARGURA|$)").split("-")[-1].strip()
+    dados["codigo"] = extrair(r"PEDIDO N[:º\s]*(\d+)")
+    dados["largura"] = extrair(r"LARGURA:\s*(\d+)")
+    dados["comprimento"] = extrair(r"PASSO:\s*(\d+)")
+    espessura_final = extrair(r"ESPESSURA FINAL[:\s]*(0[,\.]\d+)")
+    dados["espessura"] = espessura_final.replace(",", ".") if espessura_final else ""
+    dados["qtd_sacos"] = extrair(r"quant de pacotes[:\s]*(\d+)")
+    dados["observacoes"] = extrair(r"OBSERVAÇÕES[:\s\n]*(.*?)\n") or extrair(r"OUTROS[:\s]*(\w+)")
+    dados["sanfona"] = "NÃO" if re.search(r"SANFONA SIM:\s*Off.*?SANFONA NAO:\s*Yes", texto, re.IGNORECASE | re.DOTALL) else "SIM"
+    dados["fundo"] = "SIM" if re.search(r"FUNDO:\s*Yes", texto) else "NÃO"
+
     return dados
 
 st.title("📋 Sistema Automático de Fichas Técnicas")
