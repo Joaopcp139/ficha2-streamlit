@@ -1,7 +1,6 @@
 import streamlit as st
 import PyPDF2
 import re
-import pandas as pd
 from io import BytesIO
 from openpyxl import load_workbook
 
@@ -25,105 +24,99 @@ def identificar_modelo(texto):
     else:
         return "saco"  # padrão caso não identifique
 
-def preencher_planilha(modelo, dados_extraidos):
-    try:
-        if modelo == "saco":
-            planilha_path = "SACO.xlsx"
-        else:
-            planilha_path = "FILME.xlsx"
+def preencher_celula(ws, texto_busca, valor, col_offset=1):
+    """Preenche a célula ao lado do texto encontrado"""
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.value and str(texto_busca).strip() in str(cell.value).strip():
+                ws.cell(row=cell.row, column=cell.column+col_offset, value=valor)
+                return True
+    return False
 
+def preencher_planilha_seguro(modelo, texto_extraido):
+    try:
+        # Carrega a planilha correta
+        planilha_path = "SACO.xlsx" if modelo == "saco" else "FILME.xlsx"
         wb = load_workbook(planilha_path)
         ws = wb.active
 
-        # Padrões de busca para os dados
-        padroes = {
-            "cliente": r"(?:CLIENTE|CLIENTES)[:\s]*(.*)",
+        # Mostra o texto extraído para debug (opcional)
+        with st.expander("Visualizar texto extraído do PDF"):
+            st.text(texto_extraido[:2000] + ("..." if len(texto_extraido) > 2000 else ""))
+
+        # Dicionário de mapeamento de campos
+        campos = {
+            "cliente": r"CLIENTE[:\s]*(.*)",
             "produto": r"PRODUTO[:\s]*(.*)",
-            "cod_produto": r"(?:CÓD\. PRODUTO|PEDIDO N°?|PEDIDO)[:\s]*(.*)",
+            "codigo": r"(?:CÓDIGO|CÓD\.|COD)[\s:]*(.*)",
             "largura": r"LARGURA[ (A-Z)]*[:\s]*(\d+[,.]?\d*)",
-            "comprimento": r"COMPRIMENTO[ (A-Z)]*[:\s]*(\d+[,.]?\d*)",
+            "comprimento": r"COMPRIMENTO[ (A-Z)]*[:\s]*(\d+[,.]?\d*)", 
             "espessura": r"ESPESSURA[ (A-Z)]*[:\s]*(\d+[,.]?\d*)",
             "passo": r"PASSO[ (A-Z)]*[:\s]*(\d+[,.]?\d*)",
             "observacoes": r"OBSERVAÇÕES[\s\n]*(.*?)(?=\n\s*\n|$)"
         }
 
-        # Extrair dados usando os padrões
+        # Extrai os dados
         dados = {}
-        for chave, padrao in padroes.items():
-            match = re.search(padrao, dados_extraidos, re.IGNORECASE)
+        for campo, regex in campos.items():
+            match = re.search(regex, texto_extraido, re.IGNORECASE)
             if match:
-                dados[chave] = match.group(1).strip()
+                dados[campo] = match.group(1).strip()
 
-        # Preencher a planilha
-        for row in ws.iter_rows():
-            for cell in row:
-                if cell.value:
-                    valor_celula = str(cell.value).strip()
-                    
-                    # Preencher cliente
-                    if "1.1 CLIENTE:" in valor_celula and "cliente" in dados:
-                        ws.cell(row=cell.row, column=cell.column+1, value=dados["cliente"])
-                    
-                    # Preencher produto
-                    elif "1.3 PRODUTO:" in valor_celula and "produto" in dados:
-                        ws.cell(row=cell.row, column=cell.column+1, value=dados["produto"])
-                    
-                    # Preencher código do produto
-                    elif "1.2 CÓD. PRODUTO:" in valor_celula and "cod_produto" in dados:
-                        ws.cell(row=cell.row, column=cell.column+1, value=dados["cod_produto"])
-                    
-                    # Preencher largura (SACO e FILME)
-                    elif "2.3 LARGURA" in valor_celula and "largura" in dados:
-                        ws.cell(row=cell.row, column=cell.column+1, value=float(dados["largura"].replace(",", ".")))
-                    
-                    # Preencher comprimento (SACO)
-                    elif "2.4 COMPRIMENTO" in valor_celula and "comprimento" in dados:
-                        ws.cell(row=cell.row, column=cell.column+1, value=float(dados["comprimento"].replace(",", ".")))
-                    
-                    # Preencher espessura
-                    elif "2.5 ESPESSURA" in valor_celula and "espessura" in dados:
-                        ws.cell(row=cell.row, column=cell.column+1, value=float(dados["espessura"].replace(",", ".")))
-                    
-                    # Preencher passo (FILME)
-                    elif "2.4 PASSO DA FOTOCÉLULA" in valor_celula and "passo" in dados:
-                        ws.cell(row=cell.row, column=cell.column+1, value=float(dados["passo"].replace(",", ".")))
-                    
-                    # Preencher observações
-                    elif "OBSERVAÇÕES" in valor_celula and "observacoes" in dados:
-                        ws.cell(row=cell.row, column=cell.column+1, value=dados["observacoes"])
+        # Mostra os dados encontrados
+        st.write("Dados identificados:")
+        st.json(dados)
 
+        # Preenche a planilha
+        if modelo == "saco":
+            preencher_celula(ws, "1.1 CLIENTE:", dados.get("cliente", ""))
+            preencher_celula(ws, "1.3 PRODUTO:", dados.get("produto", ""))
+            preencher_celula(ws, "1.2 CÓD. PRODUTO:", dados.get("codigo", ""))
+            preencher_celula(ws, "2.3 LARGURA", dados.get("largura", ""))
+            preencher_celula(ws, "2.4 COMPRIMENTO", dados.get("comprimento", ""))
+            preencher_celula(ws, "2.5 ESPESSURA", dados.get("espessura", ""))
+        else:  # filme
+            preencher_celula(ws, "1.1 CLIENTE:", dados.get("cliente", ""))
+            preencher_celula(ws, "1.3 PRODUTO:", dados.get("produto", ""))
+            preencher_celula(ws, "1.2 CÓD. PRODUTO:", dados.get("codigo", ""))
+            preencher_celula(ws, "2.3 LARGURA", dados.get("largura", ""))
+            preencher_celula(ws, "2.4 PASSO DA FOTOCÉLULA", dados.get("passo", ""))
+            preencher_celula(ws, "2.5 ESPESSURA", dados.get("espessura", ""))
+        
+        # Sempre tenta preencher observações
+        preencher_celula(ws, "OBSERVAÇÕES", dados.get("observacoes", ""))
+
+        # Salva a planilha
         output = BytesIO()
         wb.save(output)
         output.seek(0)
         return output
 
     except Exception as e:
-        st.error(f"Erro ao preencher planilha: {str(e)}")
+        st.error(f"Erro ao processar a planilha: {str(e)}")
         return None
 
-# Interface do Streamlit
+# Interface do usuário
 st.title("📋 Gerador de Fichas Técnicas")
 st.markdown("**SACOS e FILMES**")
 
-uploaded_pdf = st.file_uploader("Envie o PDF da ficha", type=["pdf"])
+uploaded_file = st.file_uploader("Envie o PDF da ficha", type=["pdf"])
 
-if uploaded_pdf:
-    with st.spinner("Processando PDF..."):
-        texto = extrair_dados_pdf(uploaded_pdf)
+if uploaded_file:
+    texto = extrair_dados_pdf(uploaded_file)
+    if texto:
+        modelo = identificar_modelo(texto)
+        st.success(f"Modelo detectado: {modelo.upper()}")
         
-        if texto:
-            modelo = identificar_modelo(texto)
-            st.success(f"✅ Modelo detectado: {modelo.upper()}")
-            
-            with st.expander("Visualizar texto extraído"):
-                st.text(texto)
-            
-            planilha_preenchida = preencher_planilha(modelo, texto)
-            
-            if planilha_preenchida:
-                st.download_button(
-                    label="📥 Baixar planilha preenchida",
-                    data=planilha_preenchida,
-                    file_name=f"FICHA_{modelo.upper()}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+        planilha = preencher_planilha_seguro(modelo, texto)
+        
+        if planilha:
+            st.download_button(
+                label="⬇️ Baixar Planilha Preenchida",
+                data=planilha,
+                file_name=f"FICHA_{modelo.upper()}_PREENCHIDA.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            st.success("Planilha gerada com sucesso!")
+        else:
+            st.error("Falha ao gerar a planilha. Verifique os dados extraídos.")
