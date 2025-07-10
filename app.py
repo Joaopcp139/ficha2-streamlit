@@ -22,151 +22,132 @@ def identificar_modelo(texto):
         return "filme"
     return "saco"
 
+def extrair_valor_celula(cell):
+    """Extrai valor de célula mesmo se for tupla ou formato complexo"""
+    try:
+        if cell.value is None:
+            return ""
+        if isinstance(cell.value, (str, int, float)):
+            return str(cell.value)
+        if isinstance(cell.value, tuple):
+            return " ".join(str(x) for x in cell.value if x)
+        return str(cell.value)
+    except:
+        return ""
+
 def preencher_celula_segura(ws, texto_busca, valor, col_offset=1):
-    """Versão aprimorada que lida com todos os tipos de células"""
+    """Versão robusta que ignora células problemáticas"""
+    texto_busca = str(texto_busca).strip()
+    valor = str(valor) if valor is not None else ""
+    
     for row in ws.iter_rows():
         for cell in row:
             try:
-                # Extrai o valor da célula de forma segura
-                cell_value = str(cell.value) if cell.value is not None else ""
-                
-                # Verifica se o texto_busca está no valor da célula
-                if str(texto_busca).strip() in cell_value.strip():
+                cell_value = extrair_valor_celula(cell)
+                if texto_busca in cell_value:
+                    target_col = cell.column + col_offset
+                    target_cell = ws.cell(row=cell.row, column=target_col)
+                    
+                    # Verifica se a célula alvo está mesclada
+                    for merged_range in ws.merged_cells.ranges:
+                        if (cell.row, target_col) in merged_range:
+                            target_cell = ws.cell(row=merged_range.min_row, 
+                                                column=merged_range.min_col)
+                            break
+                    
+                    # Tenta preencher a célula
                     try:
-                        # Verifica se a célula de destino está mesclada
-                        target_row = cell.row
-                        target_col = cell.column + col_offset
-                        
-                        # Encontra o intervalo mesclado que contém a célula alvo
-                        for merged_range in ws.merged_cells.ranges:
-                            if (target_row, target_col) in merged_range:
-                                # Preenche a célula principal do intervalo mesclado
-                                ws.cell(
-                                    row=merged_range.min_row,
-                                    column=merged_range.min_col,
-                                    value=str(valor) if valor is not None else ""
-                                )
-                                return True
-                        
-                        # Se não está mesclada, preenche normalmente
-                        ws.cell(
-                            row=target_row,
-                            column=target_col,
-                            value=str(valor) if valor is not None else ""
-                        )
+                        target_cell.value = valor
                         return True
-                        
-                    except Exception as e:
-                        st.warning(f"Célula {get_column_letter(cell.column)}{cell.row} não pôde ser preenchida. Erro: {str(e)}")
+                    except:
                         continue
-                        
-            except Exception as e:
-                # Se falhar ao ler a célula, apenas continua
+            except:
                 continue
-                
     return False
 
-def preencher_planilha_avancado(modelo, texto_extraido):
+def preencher_planilha(modelo, texto_extraido):
     try:
-        # Carrega a planilha correta
         planilha_path = "SACO.xlsx" if modelo == "saco" else "FILME.xlsx"
         wb = load_workbook(planilha_path)
         ws = wb.active
 
-        # Dicionário de mapeamento de campos
-        campos = {
-            "cliente": [r"NOME DO CLIENTE[:\s]*(.*)", r"CLIENTE[:\s]*(.*)"],
-            "produto": [r"PRODUTO[:\s]*(.*)"],
-            "cod_produto": [r"PEDIDO N[º°:\s]*(.*)", r"O\.C\.\s*[:\s]*(.*)"],
-            "largura": [r"LARGURA\s*\(mm\)[:\s]*(\d+[,.]?\d*)"],
-            "largura_final": [r"LARGURA FINAL\s*\(mm\)[:\s]*(\d+[,.]?\d*)"],
-            "comprimento": [r"COMPRIMENTO[:\s]*(\d+[,.]?\d*)"],
-            "passo": [r"PASSO\s*\(mm\)[:\s]*(\d+[,.]?\d*)"],
-            "espessura": [r"ESPESSURA\s*\(p/ parede\)[:\s]*(\d+[,.]?\d*)"],
-            "espessura_final": [r"ESPESSURA FINAL[:\s]*(\d+[,.]?\d*)"],
-            "peso_bobina": [r"OTDE EM KG P/ BOBINA[:\s]*(\d+)"],
-            "qtd_sacos": [r"OTDE DE SACOS P/ PACOTE[:\s]*(\d+)"],
-            "observacoes": [r"OBSERVAÇÕES[\s\n]*(.*?)(?=\n\s*\n|$)"]
+        # Padrões de extração
+        padroes = {
+            "cliente": r"(?:CLIENTE|NOME DO CLIENTE)[:\s]*(.*?)(?:\n|$)",
+            "produto": r"PRODUTO[:\s]*(.*?)(?:\n|$)", 
+            "codigo": r"(?:CÓD\. PRODUTO|PEDIDO N°?|O\.C\.)[:\s]*(.*?)(?:\n|$)",
+            "largura": r"LARGURA\s*\(mm\)[:\s]*(\d+[,.]?\d*)",
+            "comprimento": r"COMPRIMENTO[:\s]*(\d+[,.]?\d*)",
+            "espessura": r"ESPESSURA\s*\(.*\)[:\s]*(\d+[,.]?\d*)",
+            "observacoes": r"OBSERVAÇÕES[\s\n]*(.*?)(?=\n\s*\n|$)"
         }
 
-        # Extrai os dados
+        # Extrai dados
         dados = {}
-        for chave, padroes in campos.items():
-            for padrao in padroes:
-                match = re.search(padrao, texto_extraido, re.IGNORECASE)
-                if match:
-                    dados[chave] = match.group(1).strip()
-                    break
+        for campo, regex in padroes.items():
+            match = re.search(regex, texto_extraido, re.IGNORECASE)
+            if match:
+                dados[campo] = match.group(1).strip()
 
-        # Mostra os dados encontrados para debug
-        with st.expander("Dados extraídos do PDF"):
-            st.json(dados)
-
-        # Preenche a planilha de acordo com o modelo
-        if modelo == "saco":
-            mapeamento = [
+        # Mapeamento de campos
+        campos = {
+            "saco": [
                 ("1.1 CLIENTE:", "cliente"),
                 ("1.3 PRODUTO:", "produto"),
-                ("1.2 CÓD. PRODUTO:", "cod_produto"),
+                ("1.2 CÓD. PRODUTO:", "codigo"),
                 ("2.3 LARGURA", "largura"),
                 ("2.4 COMPRIMENTO", "comprimento"),
                 ("2.5 ESPESSURA", "espessura"),
-                ("2.6 LARGURA", "largura_final"),
-                ("2.7 COMPRIMENTO", "comprimento"),
-                ("2.8 ESPESSURA", "espessura_final"),
-                ("OBSERVAÇÕES", "observacoes"),
-                ("QTDE DE SACOS POR AMARRAÇÃO", "qtd_sacos")
-            ]
-        else:  # filme
-            mapeamento = [
+                ("OBSERVAÇÕES", "observacoes")
+            ],
+            "filme": [
                 ("1.1 CLIENTE:", "cliente"),
-                ("1.3 PRODUTO:", "produto"),
-                ("1.2 CÓD. PRODUTO:", "cod_produto"),
+                ("1.3 PRODUTO:", "produto"), 
+                ("1.2 CÓD. PRODUTO:", "codigo"),
                 ("2.3 LARGURA", "largura"),
-                ("2.4 PASSO DA FOTOCÉLULA", "passo"),
+                ("2.4 PASSO DA FOTOCÉLULA", "comprimento"),
                 ("2.5 ESPESSURA", "espessura"),
-                ("OBSERVAÇÕES", "observacoes"),
-                ("2.9 PESO POR BOBINA:", "peso_bobina")
+                ("OBSERVAÇÕES", "observacoes")
             ]
-        
-        for texto_celula, chave_dado in mapeamento:
-            valor = dados.get(chave_dado, "")
-            if not preencher_celula_segura(ws, texto_celula, valor):
-                st.warning(f"Campo '{texto_celula}' não pode ser preenchido")
+        }
 
-        # Salva a planilha
+        # Preenche planilha
+        for texto_celula, chave in campos[modelo]:
+            valor = dados.get(chave, "")
+            preencher_celula_segura(ws, texto_celula, valor)
+
         output = BytesIO()
         wb.save(output)
         output.seek(0)
         return output
 
     except Exception as e:
-        st.error(f"Erro ao processar a planilha: {str(e)}")
+        st.error(f"Erro ao processar planilha: {str(e)}")
         return None
 
-# Interface do Streamlit
-st.title("📋 Sistema de Fichas Técnicas Automatizado")
-st.markdown("**SACOS e FILMES**")
+# Interface
+st.title("📋 Gerador de Fichas Técnicas")
 
-uploaded_file = st.file_uploader("Envie o PDF da ficha técnica", type=["pdf"])
+uploaded_file = st.file_uploader("Envie o PDF da ficha", type=["pdf"])
 
 if uploaded_file:
-    with st.spinner("Processando arquivo..."):
-        texto = extrair_dados_pdf(uploaded_file)
+    texto = extrair_dados_pdf(uploaded_file)
+    if texto:
+        modelo = identificar_modelo(texto)
+        st.success(f"Modelo detectado: {modelo.upper()}")
         
-        if texto:
-            modelo = identificar_modelo(texto)
-            st.success(f"✅ Tipo identificado: {modelo.upper()}")
-            
-            planilha = preencher_planilha_avancado(modelo, texto)
-            
-            if planilha:
-                st.download_button(
-                    label="⬇️ Baixar Ficha Técnica Preenchida",
-                    data=planilha,
-                    file_name=f"FICHA_{modelo.upper()}_PREENCHIDA.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-                st.success("Planilha gerada com sucesso!")
-            else:
-                st.error("Ocorreu um erro ao preencher a planilha.")
+        with st.expander("Ver texto extraído"):
+            st.text(texto[:1000] + ("..." if len(texto) > 1000 else ""))
+        
+        planilha = preencher_planilha(modelo, texto)
+        
+        if planilha:
+            st.download_button(
+                label="⬇️ Baixar Planilha",
+                data=planilha,
+                file_name=f"FICHA_{modelo.upper()}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            st.success("Planilha gerada com sucesso!")
+        else:
+            st.error("Falha ao gerar planilha")
