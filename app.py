@@ -1,27 +1,13 @@
-import streamlit as st
-import PyPDF2
-import re
-from io import BytesIO
-from openpyxl import load_workbook
-
-def extrair_dados_pdf(pdf_file):
-    try:
-        pdf_reader = PyPDF2.PdfReader(pdf_file)
-        texto = ""
-        for page in pdf_reader.pages:
-            texto += page.extract_text() + "\n"
-        return texto
-    except Exception as e:
-        st.error(f"Erro ao ler o PDF: {str(e)}")
+def tratar_valor(v):
+    if isinstance(v, tuple):
+        return str(v[0]) if v else ""
+    if v is None:
         return ""
-
-def identificar_modelo(texto):
-    texto = texto.upper()
-    if "FILME" in texto:
-        return "filme"
-    return "saco"
+    return str(v)
 
 def preencher_celula_mesclada(ws, texto_busca, valor):
+    valor = tratar_valor(valor)
+
     for row in ws.iter_rows():
         for cell in row:
             try:
@@ -63,58 +49,3 @@ def preencher_planilha_saco(ws, dados):
     except Exception as e:
         st.error(f"Erro ao preencher planilha: {str(e)}")
         return False
-
-def processar_pdf(texto):
-    dados = {}
-    def extrair(padrao):
-        match = re.search(padrao, texto, re.IGNORECASE)
-        return match.group(1).strip() if match else ""
-
-    dados["cliente"] = extrair(r"CLIENTES:\s*\d+\s*-\s*(.*)")
-    dados["produto"] = extrair(r"PRODUTO:\s*(\d+.*?)(?:\n|QTDE|LARGURA|$)")
-    dados["codigo"] = extrair(r"PEDIDO N[:º\s]*(\d+)")
-    dados["largura"] = extrair(r"LARGURA:\s*(\d+)")
-    dados["comprimento"] = extrair(r"PASSO:\s*(\d+)")
-    espessura_final = extrair(r"ESPESSURA FINAL[:\s]*(0[,\.]\d+)")
-    dados["espessura"] = espessura_final.replace(",", ".") if espessura_final else ""
-    dados["qtd_sacos"] = extrair(r"quant de pacotes[:\s]*(\d+)")
-
-    observacao = extrair(r"OBSERVAÇÕES:\s*(.*?)\n")
-    if not observacao or observacao.upper() in ["EMPACOTAMENTO", ""]:
-        observacao = extrair(r"OUTROS[:\s]*(\w+)")
-    dados["observacoes"] = observacao
-
-    dados["sanfona"] = "NÃO" if re.search(r"SANFONA SIM:\s*Off.*?SANFONA NAO:\s*Yes", texto, re.IGNORECASE | re.DOTALL) else "SIM"
-    dados["fundo"] = "SIM" if re.search(r"FUNDO:\s*Yes", texto) else "NÃO"
-
-    return dados
-
-st.title("📋 Sistema Automático de Fichas Técnicas")
-uploaded_file = st.file_uploader("Envie o PDF da ficha", type=["pdf"])
-
-if uploaded_file:
-    texto = extrair_dados_pdf(uploaded_file)
-    if texto:
-        modelo = identificar_modelo(texto)
-        st.success(f"Modelo detectado: {modelo.upper()}")
-        dados = processar_pdf(texto)
-        with st.expander("Ver dados extraídos"):
-            st.json(dados)
-        try:
-            wb = load_workbook("SACO.xlsx")
-            ws = wb.active
-            if preencher_planilha_saco(ws, dados):
-                output = BytesIO()
-                wb.save(output)
-                output.seek(0)
-                st.download_button(
-                    label="⬇️ Baixar Ficha Técnica Preenchida",
-                    data=output,
-                    file_name=f"FICHA_{modelo.upper()}_PREENCHIDA.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-                st.success("Planilha gerada com sucesso!")
-            else:
-                st.error("Ocorreu um erro ao preencher a planilha")
-        except Exception as e:
-            st.error(f"Erro ao processar a planilha: {str(e)}")
