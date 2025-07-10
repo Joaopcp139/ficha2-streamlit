@@ -58,7 +58,7 @@ def preencher_planilha_saco(ws, dados):
             ws['J20'].value = "X"
         if dados.get("sanfona") == "NÃO":
             ws['B38'].value = "X"
-        ws['G40'].value = "X"  # QUADRADO (sempre marcado como exemplo)
+        ws['G40'].value = "X"
         return True
     except Exception as e:
         st.error(f"Erro ao preencher planilha: {str(e)}")
@@ -71,14 +71,19 @@ def processar_pdf(texto):
         return match.group(1).strip() if match else ""
 
     dados["cliente"] = extrair(r"CLIENTES:\s*\d+\s*-\s*(.*)")
-    dados["produto"] = extrair(r"PRODUTO:\s*(.*?)(?=QTDE|LARGURA|$)").split("-")[-1].strip()
+    dados["produto"] = extrair(r"PRODUTO:\s*(\d+.*?)(?:\n|QTDE|LARGURA|$)")
     dados["codigo"] = extrair(r"PEDIDO N[:º\s]*(\d+)")
     dados["largura"] = extrair(r"LARGURA:\s*(\d+)")
     dados["comprimento"] = extrair(r"PASSO:\s*(\d+)")
     espessura_final = extrair(r"ESPESSURA FINAL[:\s]*(0[,\.]\d+)")
     dados["espessura"] = espessura_final.replace(",", ".") if espessura_final else ""
     dados["qtd_sacos"] = extrair(r"quant de pacotes[:\s]*(\d+)")
-    dados["observacoes"] = extrair(r"OBSERVAÇÕES[:\s\n]*(.*?)\n") or extrair(r"OUTROS[:\s]*(\w+)")
+
+    observacao = extrair(r"OBSERVAÇÕES:\s*(.*?)\n")
+    if not observacao or observacao.upper() in ["EMPACOTAMENTO", ""]:
+        observacao = extrair(r"OUTROS[:\s]*(\w+)")
+    dados["observacoes"] = observacao
+
     dados["sanfona"] = "NÃO" if re.search(r"SANFONA SIM:\s*Off.*?SANFONA NAO:\s*Yes", texto, re.IGNORECASE | re.DOTALL) else "SIM"
     dados["fundo"] = "SIM" if re.search(r"FUNDO:\s*Yes", texto) else "NÃO"
 
