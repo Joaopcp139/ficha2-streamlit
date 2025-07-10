@@ -3,59 +3,108 @@ import PyPDF2
 import re
 from io import BytesIO
 from openpyxl import load_workbook
-from pathlib import Path
 
-EXCEL_PATH = Path(__file__).parent / "SACO.xlsx"
-
-def extrair_dados(pdf_file):
-    pdf_reader = PyPDF2.PdfReader(pdf_file)
-    return "\n".join(page.extract_text() for page in pdf_reader.pages)
-
-def preencher_saco(texto):
-    wb = load_workbook(EXCEL_PATH)
-    ws = wb.active
-
-    def extrair(padrao):
-        resultado = re.search(padrao, texto, re.IGNORECASE)
-        return resultado.group(1).strip() if resultado else ""
-
-    ws['C7'] = extrair(r"NOME DO CLIENTE[:\s]*(.*)") or "COOPAVEL COOPERATIVA AGROINDUSTRIAL"
-    ws['C8'] = extrair(r"PRODUTO[:\s]*(.*)") or "SACO MULTIUSO IMPRESSO TRANSPARENTE"
-    ws['J7'] = extrair(r"PEDIDO N[º°:\s]*(.*)") or "36486"
-
-    medidas = re.search(r"(\d+)X(\d+)X([\d,]+)", texto)
-    if medidas:
-        largura = float(medidas.group(1))
-        altura = float(medidas.group(2))
-        espessura = float(medidas.group(3).replace(",", "."))
-        ws['A16'] = largura
-        ws['E16'] = altura
-        ws['I16'] = espessura
-        ws['A20'] = largura
-        ws['E20'] = altura
-        ws['I20'] = espessura
-
-    # Checkboxes fixos
-    ws['J20'] = "X"  # FUNDO
-    ws['B38'] = "X"  # NÃO SANFONA
-    ws['G40'] = "X"  # QUADRADO
-
-    output = BytesIO()
-    wb.save(output)
-    return output.getvalue()
-
-# Interface Streamlit
-st.title("✅ Sistema Simplificado de Preenchimento de Fichas - SACOS")
-pdf = st.file_uploader("Envie o PDF do modelo SACOS", type=["pdf"])
-
-if pdf:
+def extrair_dados_pdf(pdf_file):
     try:
-        dados = extrair_dados(pdf)
-        planilha = preencher_saco(dados)
-        st.download_button("⬇️ Baixar Ficha Preenchida", planilha, "FICHA_PREENCHIDA.xlsx")
-        st.success("Pronto! Planilha gerada com sucesso.")
+        pdf_reader = PyPDF2.PdfReader(pdf_file)
+        texto = ""
+        for page in pdf_reader.pages:
+            texto += page.extract_text() + "\n"
+        return texto
     except Exception as e:
-        st.error(f"Erro ao processar o arquivo: {e}")
+        st.error(f"Erro ao ler o PDF: {str(e)}")
+        return ""
 
-    if not re.search(r"(\d+)X(\d+)X([\d,]+)", dados):
-        st.warning("⚠️ Atenção: Medidas não foram encontradas no PDF enviado.")
+def identificar_modelo(texto):
+    texto = texto.upper()
+    if "FILME" in texto:
+        return "filme"
+    return "saco"
+
+def preencher_celula_mesclada(ws, texto_busca, valor):
+    """Preenche células ao lado de texto alvo mesmo se forem mescladas"""
+    for row in ws.iter_rows():
+        for cell in row:
+            try:
+                cell_val = str(cell.value).strip() if isinstance(cell.value, str) else ""
+                if texto_busca.strip() in cell_val:
+                    destino_col = cell.column + 1
+                    destino_row = cell.row
+
+                    for merged_range in ws.merged_cells.ranges:
+                        if (destino_row, destino_col) in merged_range:
+                            ws.cell(row=merged_range.min_row, column=merged_range.min_col, value=valor)
+                            return True
+
+                    ws.cell(row=destino_row, column=destino_col, value=valor)
+                    return True
+            except Exception as e:
+                st.warning(f"Célula {cell.coordinate} não pode ser preenchida: {str(e)}")
+    return False
+
+def preencher_planilha_saco(ws, dados):
+    try:
+        preencher_celula_mesclada(ws, "1.1 CLIENTE:", dados.get("cliente", ""))
+        preencher_celula_mesclada(ws, "1.3 PRODUTO:", dados.get("produto", ""))
+        preencher_celula_mesclada(ws, "1.2 CÓD. PRODUTO:", dados.get("codigo", ""))
+        preencher_celula_mesclada(ws, "2.3 LARGURA", dados.get("largura", ""))
+        preencher_celula_mesclada(ws, "2.4 COMPRIMENTO", dados.get("comprimento", ""))
+        preencher_celula_mesclada(ws, "2.5 ESPESSURA", dados.get("espessura", ""))
+        preencher_celula_mesclada(ws, "2.6 LARGURA", dados.get("largura", ""))
+        preencher_celula_mesclada(ws, "2.7 COMPRIMENTO", dados.get("comprimento", ""))
+        preencher_celula_mesclada(ws, "2.8 ESPESSURA", dados.get("espessura", ""))
+        preencher_celula_mesclada(ws, "QTDE DE SACOS POR AMARRAÇÃO", dados.get("qtd_sacos", ""))
+        preencher_celula_mesclada(ws, "OBSERVAÇÕES", dados.get("observacoes", ""))
+        ws['J20'].value = "X"
+        ws['B38'].value = "X"
+        ws['G40'].value = "X"
+        return True
+    except Exception as e:
+        st.error(f"Erro ao preencher planilha: {str(e)}")
+        return False
+
+def processar_pdf(texto):
+    dados = {}
+    def extrair(padrao):
+        match = re.search(padrao, texto, re.IGNORECASE)
+        return match.group(1).strip() if match else ""
+    dados["cliente"] = extrair(r"NOME DO CLIENTE[:\s]*(.*)")
+    dados["produto"] = extrair(r"PRODUTO[:\s]*(.*)")
+    dados["codigo"] = extrair(r"PEDIDO N[º°:\s]*(.*)")
+    dados["largura"] = extrair(r"LARGURA\s*\(mm\)[:\s]*(\d+)")
+    dados["comprimento"] = extrair(r"COMPRIMENTO[:\s]*(\d+)")
+    espessura = extrair(r"ESPESSURA\s*\(p/ parede\)[:\s]*([\d,]+)")
+    dados["espessura"] = espessura.replace(",", ".") if espessura else ""
+    dados["qtd_sacos"] = extrair(r"OTDE DE SACOS P/ PACOTE[:\s]*(\d+)")
+    dados["observacoes"] = extrair(r"OBSERVAÇÕES[\s\n]*(.*?)(?=\n\s*\n|$)")
+    return dados
+
+st.title("📋 Sistema Automático de Fichas Técnicas")
+uploaded_file = st.file_uploader("Envie o PDF da ficha", type=["pdf"])
+
+if uploaded_file:
+    texto = extrair_dados_pdf(uploaded_file)
+    if texto:
+        modelo = identificar_modelo(texto)
+        st.success(f"Modelo detectado: {modelo.upper()}")
+        dados = processar_pdf(texto)
+        with st.expander("Ver dados extraídos"):
+            st.json(dados)
+        try:
+            wb = load_workbook("SACO.xlsx")
+            ws = wb.active
+            if preencher_planilha_saco(ws, dados):
+                output = BytesIO()
+                wb.save(output)
+                output.seek(0)
+                st.download_button(
+                    label="⬇️ Baixar Ficha Técnica Preenchida",
+                    data=output,
+                    file_name=f"FICHA_{modelo.upper()}_PREENCHIDA.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                st.success("Planilha gerada com sucesso!")
+            else:
+                st.error("Ocorreu um erro ao preencher a planilha")
+        except Exception as e:
+            st.error(f"Erro ao processar a planilha: {str(e)}")
